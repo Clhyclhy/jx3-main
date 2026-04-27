@@ -1,7 +1,7 @@
 import inspect
-from pathlib import Path
-from typing import cast
 import os
+from pathlib import Path
+from typing import Callable, cast
 
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register, StarTools
@@ -22,13 +22,15 @@ from .core.fun_basic import load_as_base64
           "https://github.com/qsc20001102/astrbot_plugin_jx3api"
 )
 class Jx3ApiPlugin(Star):
+    """AstrBot 插件入口：负责初始化依赖、解析指令并分发执行。"""
+
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
-        # 获取插件配置
+        # 插件配置
         self.conf = config
 
-        # 指令前缀
-        self.prefix = self.conf.get("prefix",{})
+        # 指令前缀配置
+        self.prefix = self.conf.get("prefix", {})
         if self.prefix.get("enable"):
             logger.info(f"已启用指令前缀功能，前缀为：{self.prefix.get('text')}")
         else:
@@ -45,9 +47,8 @@ class Jx3ApiPlugin(Star):
         # 构造所有类
         self.create_all()
 
-
-        # 声明指令集
-        self.command_map = {}
+        # 指令集（在 initialize 完成后填充）
+        self.command_map: dict[str, Callable] = {}
 
         logger.info("jx3api插件初始化完成")
 
@@ -65,14 +66,14 @@ class Jx3ApiPlugin(Star):
             # 开启后台推送
             await self.jx3at.init_tasks()
 
-        except Exception as e:
+        except Exception:
             if self.jx3at is not None:
                 await self.jx3at.destroy()
             logger.exception("功能模块初始化失败")
             raise
 
-        # 指令集
-        self.ini_command_map()
+        # 指令集初始化
+        self.init_command_map()
 
         logger.info("jx3api 异步插件初始化完成")
 
@@ -203,9 +204,9 @@ class Jx3ApiPlugin(Star):
         """)        
 
 
-    def ini_command_map(self):
-        """初始化指令集"""
-        self.command_map = {
+    def build_command_map(self) -> dict[str, Callable]:
+        """构建指令与处理函数映射。"""
+        return {
             "功能": self.jx3cmd.jx3_helps,
             "日常": self.jx3cmd.jx3_richang,
             "月历": self.jx3cmd.jx3_richangyuche,
@@ -257,6 +258,16 @@ class Jx3ApiPlugin(Star):
         }
 
 
+    def init_command_map(self):
+        """初始化指令集。"""
+        self.command_map = self.build_command_map()
+
+
+    # 兼容旧方法名，避免外部调用报错
+    def ini_command_map(self):
+        self.init_command_map()
+
+
     def parse_message(self, text: str) -> list[str] | None:
         """消息解析"""
         text = text.strip()
@@ -265,7 +276,11 @@ class Jx3ApiPlugin(Star):
 
         # 前缀模式
         if self.prefix.get("enable"):
-            prefix = self.prefix.get("text")
+            prefix = str(self.prefix.get("text", "")).strip()
+            if not prefix:
+                # 配置错误时不拦截消息，避免插件全量失效
+                logger.warning("已启用指令前缀但前缀文本为空，按无前缀模式处理")
+                return text.split()
             if text.startswith(prefix):
                 text = text[len(prefix):].strip()
             else:
